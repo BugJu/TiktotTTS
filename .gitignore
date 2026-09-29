@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Ausgaben aus der Pipeline (pro Reddit-Post) - nicht einchecken
+*_clips_50s/
+*/video/
+* pt*.txt
+*.mp3
+*.srt
+*.wav
+
+# Gameplay-Videos sind gross - nicht einchecken
+gameplays/*.mp4
+*.mp4
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
