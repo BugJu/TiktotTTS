@@ -19,3 +19,6 @@ gameplays/*.mp4
 .idea/
 .DS_Store
 Thumbs.db
+
+# Temp (gh auth login output)
+_ghauth.*
