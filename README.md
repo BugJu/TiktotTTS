@@ -2,7 +2,8 @@
 
 Wandelt einen **Reddit-Post** automatisch in fertige **Hochkant-Videos** um:
 Story vertont (Microsoft Edge-TTS) + Gameplay im Hintergrund + **wortgenau
-synchronisierte Untertitel** direkt ins Video eingebrannt.
+synchronisierte Untertitel** direkt ins Video eingebrannt + **Part-Titel**
+oben eingeblendet.
 
 Ein einziger Befehl reicht:
 
@@ -67,6 +68,7 @@ python reddit_chunker.py "https://www.reddit.com/r/..."
 | `--overwrite` | Vorhandene MP3s neu erzeugen |
 | `--no-tts` | nur Schnipsel, kein Audio |
 | `--no-captions` | keine Untertitel erzeugen/einbrennen |
+| `--no-title` | Part-Titel (`<Titel> PT. <n>`) nicht oben einblenden |
 | `--no-video` | nur Audio, kein Video |
 | `--gameplay PFAD` | Gameplay-Datei/-Ordner erzwingen |
 | `--segment N` | Gameplay-Schnipsel-Länge in Sekunden |
@@ -100,6 +102,27 @@ Optionen u. a. `--skip-split` (vorhandene Schnipsel wiederverwenden),
 - Quelle: `WordBoundary`-Timings von edge-tts → wortgenau
 
 Deaktivieren: `--no-captions`.
+
+## Part-Titel (Kopf-Einblendung)
+
+Zusätzlich zu den gesprochenen Untertiteln wird oben im Video dauerhaft der
+Part-Titel angezeigt, z. B.:
+
+```
+I GOT TRAPPED IN THE MALL PT. 1
+```
+
+- **Schreibweise:** Der Titel wird in **Original-Schreibweise** ausgegeben –
+  es wird nichts groß- oder kleingeschrieben.
+- **Aufbau:** `<Titel> PT. <n>` (Titel gefolgt von Part-Nummer).
+- **Stil:** weisser Text mit kräftiger schwarzer Kontur (**kein** Hintergrundkasten),
+  deutlich kleiner als die Untertitel und auf **maximal 2 Zeilen** begrenzt
+  (balanciert umgebrochen, Schrift wird bei Bedarf verkleinert).
+- **Position:** oben mittig.
+- Wird der Titel nicht explizit übergeben (z. B. bei `make_videos.py`), wird
+  er aus dem Dateinamen abgeleitet (`<Titel> pt<n>` → `<Titel> PT. <n>`).
+
+Deaktivieren: `--no-title`.
 
 ## Hinweise
 

@@ -437,6 +437,8 @@ def main(argv=None) -> int:
     parser.add_argument("--overwrite", action="store_true", help="Vorhandene MP3s neu erzeugen")
     parser.add_argument("--no-captions", action="store_true",
                         help="Keine Untertitel (.srt) erzeugen/einbrennen")
+    parser.add_argument("--no-title", action="store_true",
+                        help="Part-Titel (<Titel> PT. <n>) nicht oben einblenden")
 
     # Video-Teil
     parser.add_argument("--gameplay",
@@ -535,15 +537,20 @@ def main(argv=None) -> int:
     clips_dir = args.clips_dir or f"gameplay_clips_{args.segment}s"
     videos_dir = args.videos_dir or os.path.join(folder, "video")
 
+    # Kopf-Einblendung: "<Reddit-Titel> PT. <n>" in Originalschreibweise.
+    titles = {} if args.no_title else mv.title_map_for_parts(parts, title)
+
     print("=" * 60)
     print(f"Video          : {os.path.basename(gameplay)}  ({len(parts)} Parts)")
     print(f"Schnipsel      : {clips_dir} ({args.segment}s)")
     print(f"Videos         : {videos_dir}")
+    print(f"Part-Titel     : {'aus (--no-title)' if args.no_title else title + ' PT. <n>'}")
     try:
         v_ok, v_failed = mv.build_videos_for_parts(
             gameplay, parts, clips_dir, videos_dir,
             segment=args.segment, keep_gameplay_audio=args.keep_gameplay_audio,
-            captions=not args.no_captions, crf=args.crf, preset=args.preset,
+            captions=not args.no_captions, show_title=not args.no_title, titles=titles,
+            crf=args.crf, preset=args.preset,
             seed=args.seed, reuse_clips=True,
         )
     except Exception as exc:  # noqa: BLE001

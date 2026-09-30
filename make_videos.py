@@ -70,6 +70,51 @@ def natural_key(path: str):
     return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", name)]
 
 
+# Part-Kuerzel am Dateinamen-Ende, z. B. "My story pt3" -> Titel "My story", Part 3.
+_PART_RE = re.compile(r"^(?P<title>.*?)[\s._-]*pt\s*(?P<num>\d+)$", re.IGNORECASE)
+
+
+def split_part_name(path_or_base: str) -> tuple[str, str | None]:
+    """Zerlegt 'My story pt3' in ('My story', '3').
+
+    Ohne Part-Kuerzel wird ('Name', None) zurueckgegeben.
+    """
+    name = os.path.splitext(os.path.basename(path_or_base))[0].strip()
+    match = _PART_RE.match(name)
+    if match and match.group("title").strip():
+        return match.group("title").strip(), match.group("num")
+    return name, None
+
+
+def title_overlay_text(path_or_base: str, title: str | None = None,
+                       part: int | None = None) -> str:
+    """Einblend-Text fuer den Kopf: '<Titel> PT. <n>'.
+
+    Die Schreibweise des Titels wird unveraendert uebernommen (nichts wird
+    gross- oder kleingeschrieben); nur das Part-Kuerzel 'PT. <n>' kommt dazu.
+    `title`/`part` erlauben es, den echten (ungesaeuberten) Reddit-Titel und
+    die Part-Nummer direkt zu setzen.
+    """
+    if title is not None and part is not None:
+        return f"{title} PT. {part}"
+    inferred, num = split_part_name(path_or_base)
+    return f"{inferred} PT. {num}" if num else inferred
+
+
+def title_map_for_parts(parts: list[str], title: str) -> dict[str, str]:
+    """Ordnet jedem Part-Basisnamen den Einblend-Text '<Titel> PT. <n>' zu.
+
+    Der Titel wird unveraendert uebernommen (keine Gross-/Kleinschreibung),
+    nur 'PT. <n>' kommt dazu. Parts ohne Nummer bekommen nur den Titel.
+    """
+    mapping: dict[str, str] = {}
+    for part in parts:
+        base = os.path.splitext(os.path.basename(part))[0]
+        _, num = split_part_name(base)
+        mapping[base] = title_overlay_text(base, title=title, part=num) if num else title
+    return mapping
+
+
 # ---------------------------------------------------------------------------
 # Schritt 1: Video in Schnipsel zerlegen
 # ---------------------------------------------------------------------------
@@ -149,9 +194,47 @@ def _wrap(text: str, max_chars: int) -> list[str]:
     return lines or [text]
 
 
-def srt_to_ass(srt_path: str, width: int, height: int, font: str = "Arial") -> str:
-    """Baut eine ASS-Datei: Text mittig, ohne Hintergrundbox, umbruchsicher."""
-    cues = _parse_srt(open(srt_path, encoding="utf-8").read())
+def _fit_title(text: str, max_width: int, base_fontsize: int,
+               min_fontsize: int = 18, char_ratio: float = 0.56) -> tuple[list[str], int]:
+    """Bricht den Titel auf hoechstens 2 Zeilen und waehlt die Schriftgroesse.
+
+    Passt der Titel in eine Zeile, bleibt es bei einer; andernfalls wird er
+    balanciert auf zwei Zeilen verteilt und die Schrift so weit verkleinert,
+    dass die laengste Zeile in `max_width` passt.
+
+    Rueckgabe: (zeilen, schriftgroesse)
+    """
+    def fits(size: int) -> bool:
+        return len(text) * size * char_ratio <= max_width
+
+    words = text.split()
+    if len(words) < 2 or fits(base_fontsize):
+        # Einzeilig - nur verkleinern, falls es (auch bei Basisgroesse) zu breit ist.
+        if fits(base_fontsize):
+            return [text], base_fontsize
+        fontsize = int(max(min_fontsize, max_width / max(1, len(text)) / char_ratio))
+        return [text], fontsize
+
+    # Balancierte Aufteilung auf zwei Zeilen (moeglichst gleiche Laenge).
+    split = min(
+        range(1, len(words)),
+        key=lambda k: abs(len(" ".join(words[:k])) - len(" ".join(words[k:]))),
+    )
+    lines = [" ".join(words[:split]), " ".join(words[split:])]
+    longest = max(len(line) for line in lines)
+    fontsize = int(max(min_fontsize, min(base_fontsize, max_width / longest / char_ratio)))
+    return lines, fontsize
+
+
+def srt_to_ass(srt_path: str | None, width: int, height: int, font: str = "Arial",
+               title: str | None = None) -> str:
+    """Baut eine ASS-Datei: Sprech-Untertitel mittig, Part-Titel oben.
+
+    `srt_path` darf None sein (dann wird nur der Titel eingeblendet).
+    """
+    cues: list[tuple[float, float, str]] = []
+    if srt_path and os.path.isfile(srt_path):
+        cues = _parse_srt(open(srt_path, encoding="utf-8").read())
 
     fontsize = max(24, round(height * 0.040))
     outline = max(3, round(height * 0.0030))   # kraeftige Kontur -> lesbar ohne Box
@@ -160,6 +243,17 @@ def srt_to_ass(srt_path: str, width: int, height: int, font: str = "Arial") -> s
     char_w = fontsize * 0.56                   # grobe Zeichenbreite zum Umbruch
     max_chars = max(8, int(max_width / char_w))
     center_x, center_y = width // 2, height // 2
+
+    # Kopf-Einblendung (Part-Titel): oben, kleiner Text, ohne Box (nur Kontur),
+    # hoechstens 2 Zeilen.
+    title_base = max(22, round(height * 0.030))
+    title_top = max(16, round(height * 0.045))
+    title_outline = max(3, round(height * 0.0026))
+    title_shadow = max(1, round(height * 0.0012))
+    title_lines: list[str] = []
+    title_fontsize = title_base
+    if title:
+        title_lines, title_fontsize = _fit_title(title, max_width, title_base)
 
     header = (
         "[Script Info]\n"
@@ -174,12 +268,21 @@ def srt_to_ass(srt_path: str, width: int, height: int, font: str = "Arial") -> s
         "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
         f"Style: Default,{font},{fontsize},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
         f"-1,0,0,0,100,100,0,0,1,{outline},{shadow},5,"
-        f"{round(width*0.07)},{round(width*0.07)},0,1\n\n"
+        f"{round(width*0.07)},{round(width*0.07)},0,1\n"
+        f"Style: Title,{font},{title_fontsize},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
+        f"-1,0,0,0,100,100,0,0,1,{title_outline},{title_shadow},8,"
+        f"{round(width*0.05)},{round(width*0.05)},{title_top},1\n\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
 
     events: list[str] = []
+    if title_lines:
+        body = "\\N".join(title_lines)
+        events.append(
+            f"Dialogue: 0,0:00:00.00,9:59:59.99,Title,,0,0,0,,"
+            f"{{\\an8\\pos({center_x},{title_top})}}{body}"
+        )
     for start, end, text in cues:
         body = "\\N".join(_wrap(text, max_chars))
         events.append(
@@ -198,7 +301,8 @@ def _escape_filter_path(path: str) -> str:
 
 def combine(clip: str, audio: str, out_path: str, keep_gameplay_audio: bool,
             crf: int, preset: str, verbose: bool,
-            subtitle_path: str | None = None, size: tuple[int, int] | None = None) -> None:
+            subtitle_path: str | None = None, size: tuple[int, int] | None = None,
+            title: str | None = None) -> None:
     args = [
         "-y",
         "-stream_loop", "-1", "-i", clip,     # Gameplay-Schleife (falls kuerzer als Audio)
@@ -211,11 +315,13 @@ def combine(clip: str, audio: str, out_path: str, keep_gameplay_audio: bool,
         args += ["-map", "1:a:0"]             # nur TTS-Ton, Gameplay-Ton verwerfen
 
     temp_ass: str | None = None
-    if subtitle_path and os.path.isfile(subtitle_path):
+    has_subtitles = bool(subtitle_path and os.path.isfile(subtitle_path))
+    if has_subtitles or title:                # Untertitel und/oder Part-Titel oben
         width, height = size or probe_size(clip)
         with tempfile.NamedTemporaryFile("w", suffix=".ass", delete=False,
                                          encoding="utf-8") as handle:
-            handle.write(srt_to_ass(subtitle_path, width, height))
+            handle.write(srt_to_ass(subtitle_path if has_subtitles else None,
+                                    width, height, title=title))
             temp_ass = handle.name
         args += ["-vf", f"ass={_escape_filter_path(temp_ass)}"]
 
@@ -243,6 +349,8 @@ def build_videos_for_parts(
     accurate: bool = False,
     keep_gameplay_audio: bool = False,
     captions: bool = True,
+    show_title: bool = True,
+    titles: dict[str, str] | None = None,
     crf: int = 23,
     preset: str = "veryfast",
     seed: int | None = None,
@@ -252,6 +360,11 @@ def build_videos_for_parts(
 ) -> tuple[int, int]:
     """Zerlegt `video` (falls noetig) und mischt jeden Part in `parts` mit
     einem zufaelligen Gameplay-Schnipsel zu einem MP4 in `videos_dir`.
+
+    `titles` ordnet einem Part-Basisnamen (Dateiname ohne Endung) den
+    Einblend-Text zu. Fehlt ein Eintrag, wird der Text aus dem Dateinamen
+    abgeleitet (`<Titel> PT. <n>`). Mit `show_title=False` entfaellt die
+    Kopf-Einblendung komplett.
 
     Rueckgabe: (erzeugt, fehlgeschlagen)
     """
@@ -277,11 +390,14 @@ def build_videos_for_parts(
         clip = rng.choice(clips)
         srt = os.path.splitext(part)[0] + ".srt"
         subtitle = srt if (captions and os.path.isfile(srt)) else None
-        log(f"  [{index}/{total}] {base}  <-  {os.path.basename(clip)}"
-            f"{'  [+Untertitel]' if subtitle else ''}")
+        overlay = None
+        if show_title:
+            overlay = (titles or {}).get(base) or title_overlay_text(base)
+        marks = ("  [+Untertitel]" if subtitle else "") + ("  [+Titel]" if overlay else "")
+        log(f"  [{index}/{total}] {base}  <-  {os.path.basename(clip)}{marks}")
         try:
             combine(clip, part, out_path, keep_gameplay_audio, crf, preset, verbose,
-                    subtitle_path=subtitle, size=size)
+                    subtitle_path=subtitle, size=size, title=overlay)
             created += 1
         except Exception as exc:  # noqa: BLE001
             log(f"      FEHLER: {exc}")
@@ -333,6 +449,8 @@ def main(argv=None) -> int:
                         help="Original-Gameplay-Ton behalten (statt nur TTS)")
     parser.add_argument("--no-captions", action="store_true",
                         help="Untertitel (.srt) NICHT ins Video einbrennen")
+    parser.add_argument("--no-title", action="store_true",
+                        help="Part-Titel (<Titel> PT. <n>) NICHT oben einblenden")
     parser.add_argument("--seed", type=int, help="Zufalls-Seed (reproduzierbare Zuordnung)")
     parser.add_argument("--verbose", action="store_true", help="ffmpeg-Befehle anzeigen")
     args = parser.parse_args(argv)
@@ -392,12 +510,15 @@ def main(argv=None) -> int:
         clip = rng.choice(clips)
         srt = os.path.splitext(part)[0] + ".srt"
         subtitle = srt if (not args.no_captions and os.path.isfile(srt)) else None
+        overlay = None if args.no_title else title_overlay_text(base)
         print(f"[{index}/{len(parts)}] {base}")
         print(f"    Gameplay: {os.path.basename(clip)}"
-              f"{'  [+Untertitel]' if subtitle else ''}")
+              f"{'  [+Untertitel]' if subtitle else ''}"
+              f"{'  [+Titel: ' + overlay + ']' if overlay else ''}")
         try:
             combine(clip, part, out_path, args.keep_gameplay_audio,
-                    args.crf, args.preset, args.verbose, subtitle_path=subtitle, size=size)
+                    args.crf, args.preset, args.verbose, subtitle_path=subtitle,
+                    size=size, title=overlay)
             print(f"    -> {os.path.basename(out_path)} ({os.path.getsize(out_path):,} Bytes)")
             ok += 1
         except Exception as exc:  # noqa: BLE001
